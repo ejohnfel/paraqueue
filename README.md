@@ -20,6 +20,6 @@ If CPU's > 3, N - 2 threads.
 
 This can be overridden by supplying the "-s" option. The reason for N-2 is to make sure "pq" does not indavertantly bog down the machine it's running on by leaving at least 2 cores untouched.
 
-Be careful in how you choose to select the "-s" value. I would recommend never going about N-1. If pressed, never exceeding "N".
+Be careful in how you choose to select the "-s" value. I would recommend never going above N-1. If pressed, never exceeding "N".
 
 Otherwise, use at your own risk unless you "nice" the script being parallelized/queued.
