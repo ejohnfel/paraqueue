@@ -13,7 +13,7 @@ The slots indicate how many items to run in parallel, queuing the rest.
 
 The script or command must take stdin for it's parameters. The input line will be placed at the end of the command.
 
-If no "-s" is supplied, "pq" does it's best to determine how many processors you have runs the following rules.
+If no "-s" is supplied, "pq" does it's best to determine how many processors you have and schedules jobs based on the following rules.
 
 If 1-3 CPU's, one thread.
 If CPU's > 3, N - 2 threads.
