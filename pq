@@ -4,6 +4,12 @@
 # Variables and Constants
 #
 
+# Debug mode flag
+DEBUGMODE=1
+
+# Verbose Mode
+VERBOSE=0
+
 # Slot Count
 SLOTS=1
 # Queue that is operational for this invocation (can be changed by "-l" flag)
@@ -12,6 +18,9 @@ OPQUEUE="default"
 QUEUEFOLDER="${HOME}/.pq"
 # Output Items
 PREFIX="output"
+
+# Flag semaphor file
+FLAG="busyflag"
 
 #
 # Functions
@@ -33,45 +42,68 @@ function Usage()
 	echo -e "-c [label]\tClean output from queue"
 	echo -e "-x [label]\tForce remove queue"
 	echo -e "-f [label]\tForce clean queue"
+	echo -e "-v\t\tEnter verbose mode"
+	echo -e "-d\t\tEnter debug mode"
+}
+
+# Debug Message Function
+function DebugMsg()
+{
+	[ ${DEBUGMODE} -gt 0 ] && printf "$(date) : %s\n" "${*}"
 }
 
 # Determine Slot Count Based on Prevailing resources
 function GetSlots()
 {
+	DebugMsg "Checking for processors"
+
 	cpus=$(egrep "^processor\s+\:\s+[0-9]+" /proc/cpuinfo | wc -l)
 
-	echo "Found ${cpus} CPU(s)..."
+	[ ${VERBOSE} -gt 0 ] && echo -n "Found ${cpus} CPU(s)..."
+
 	if [ ${cpus} -gt 3 ]; then
 		SLOTS=$(( ${cpus} - 2 ))
 	else
 		SLOTS=1
 	fi
+
+	[ ${VERBOSE} -gt 0 ] && echo " ${SLOTS} slot(s)"
+
+	DebugMsg "Found ${cpus}, so ${SLOTS} slots"
 }
 
 # Make A Queue
 function MkQueue()
 {
-	[ ! -d "${QUEUEFOLDER}/${OPQUEUE}" ] && mkdir -p "${QUEUEFOLDER}/${OPQUEUE}";
+	DebugMsg "MkQueue Called : ${QUEUEFOLDER}/${OPQUEUE}"
+
+	[ ! -d "${QUEUEFOLDER}/${OPQUEUE}" ] && mkdir -p "${QUEUEFOLDER}/${OPQUEUE}" && DebugMsg "Created queue folder"
 }
 
 # Check Status of Queue
 function CheckStatus()
 {
+	DebugMsg "CheckStatus Called"
 	echo "Not yet implemented - ${OPQUEUE}"
 }
 
 # Show Output of Queue
 function ShowOutput()
 {
+	DebugMsg "ShowOutput Called"
 	echo "Not Yet Implemented - ${OPQUEUE}"
 }
 
 # Remove Queue
 function RemoveQueue()
 {
+	DebugMsg "RemoveQueue Called"
+
 	if [ ! ${OPQUEUE} = "default" ]; then
 		if [ -d "${QUEUEFOLDER}/${OPQUEUE}" ]; then
 			if [ ! -z ${QUEUEFOLDER}/${OPQUEUE}/cmds ]; then
+				DebugMsg "Removing ${QUEUEFOLDER}/${OPQUEUE}"
+
 				rm -R "${QUEUEFOLDER}/${OPQUEUE}"
 			else
 				echo "${OPQUEUE} - not complete"
@@ -87,11 +119,22 @@ function RemoveQueue()
 # Clean Queue's Output
 function CleanQueue()
 {
-	echo "Not yet implemented"
+	DebugMsg "CleanQueue Called - Not Yet Implemented/Tested"
 
-	if [ -d "${QUEUEFOLDER}/${OPQUEUE}" ]; then
-		if [ ! -z ${QUEUEFOLDER}/${OPQUEUE}/cmds ]; then
-			rm "${QUEUEFOLDER}/${OPQUEUE}/${PREFIX}*"
+	OP="${QUEUEFOLDER}/${OPQUEUE}"
+
+	if [ -d "${OP}" ]; then
+		if [ ! -z ${OP}/cmds ]; then
+			DebugMsg "Cleaning ${OP}/${PREFIX}..."
+
+			rm ${OP}/${PREFIX}.*.* 2> /dev/null
+			rm ${OP}/started.* 2> /dev/null
+			rm ${OP}/finished.* 2> /dev/null
+			rm ${OP}/runtime.* 2> /dev/null
+			rm ${OP}/running.* 2> /dev/null
+			rm ${OP}/count.* 2> /dev/null
+
+			[ -f "${OP}/${FLAG}" ] && rm "${OP}/${FLAG}"
 		else
 			echo "${OPQUEUE} - not complete"
 		fi
@@ -103,10 +146,18 @@ function CleanQueue()
 # Force Remove Queue
 function ForceRemove()
 {
-	if [ -d "${QUEUEFOLDER}/${OPQUEUE}" ]; then
-		[ -e "${QUEUEFOLDER}/${OPQUEUE}/cmds" ] && rm -f "${QUEUEFOLDER}/${OPQUEUE}/cmds"
+	DebugMsg "ForceRemove Called"
+
+	OP="${QUEUEFOLDER}/${OPQUEUE}"
+
+	if [ -d "${OP}" ]; then
+		DebugMsg "Clearing cmds out"
+
+		[ -e "${OP}/cmds" ] && rm -f "${OP}/cmds"
 
 		if [ ! "${OPQUEUE}" = "default" ]; then
+			DebugMsg "Force Removing Queue"
+
 			RemoveQueue
 		else
 			echo "default queue cannot be deleted"
@@ -119,8 +170,14 @@ function ForceRemove()
 # Force Clean Queue's Output
 function ForceClean()
 {
-	if [ -d "${QUEUEFOLDER}/${OPQUEUE}" ]; then
-		[ -e "${QUEUEFOLDER}/${OPQUEUE}/cmds" ] && rm -f "${QUEUEFOLDER}/${OPQUEUE}/cmds"
+	DebugMsg "ForceClean Called"
+
+	OP="${QUEUEFOLDER}/${OPQUEUE}"
+
+	if [ -d "${OP}" ]; then
+		DebugMsg "Clearing cmds out"
+
+		[ -e "${OP}/cmds" ] && rm -f "${OP}/cmds"
 
 		CleanQueue
 	else
@@ -131,6 +188,8 @@ function ForceClean()
 # List Queues
 function ListQueues()
 {
+	DebugMsg "ListQueue Called"
+
 	tmp=/tmp/queues.list
 
 	ls -d -1 ${QUEUEFOLDER}/* > ${tmp}
@@ -168,7 +227,7 @@ function ListQueues()
 			runtime="-"
 		fi
 
-		if [ - f ${item}/count ]; then
+		if [ -f ${item}/count ]; then
 			count=$(( $(cat ${item}/count}) - ${running} ))
 		else
 			count=0
@@ -180,6 +239,16 @@ function ListQueues()
 	[ -e ${tmp} ] && rm ${tmp}
 }
 
+# WaitFor File To Be Removed
+function WaitFor()
+{
+	DebugMsg "WaitFor Called"
+
+	[ -e "${1}" ] && inotifywait -q -q -e delete_self "${1}"
+
+	touch "${1}"
+}
+
 # Execute A Script with Completed command string
 function Execute()
 {
@@ -187,73 +256,118 @@ function Execute()
 	# set a start time, keep track of execution time and endtime
 	# a file contains the "running" process count
 
+	DebugMsg "Execute Called with : ${*}"
+
 	OP=${QUEUEFOLDER}/${OPQUEUE}
+	STARTED="${OP}/started.${HOSTNAME}"
+	FINISHED="${OP}/finished.${HOSTNAME}"
+	RUNTIME="${OP}/runtime.${HOSTNAME}"
+	RUNNING="${OP}/running.${HOSTNAME}"
+	COUNT="${OP}/count.${HOSTNAME}"
 
 	if [ -f ${OP}/finished ]; then
-		rm ${OP}/started
-		rm ${OP}/finished
-		rm ${OP}/runtime
-		echo 0 > ${OP}/running
+		DebugMsg "Clearing out old runs"
+
+		rm "${STARTED}"
+		rm "${FINIHSED}"
+		rm "${RUNTIME}"
+		echo 0 > "${RUNNING}"
 		rm ${OP}/cmds
 		touch ${OP}/cmds
 	fi
 
-	if [ ! -f ${OP}/started ]; then
-		date > ${OP}/started
+	if [ ! -f "${STARTED}" ]; then
+		date > "${STARTED}"
 	fi
 
 	# Look for, and set flags, to prevent multiple running instances fromn clobbering one another
-	[ -e ${OP}/flag ] && inotifywait -q -q -e delete_self ${OP}/flag
-	touch ${OP}/flag
+	WaitFor "${OP}/flag"
 
 	# Fill in command file (if there is input)
+	DebugMsg "Reading in parameter lines, outputing to cmds file"
+
 	while read line; do
-		cmd="${*} ${line}" >> ${OP}/cmds
+		echo "${*} ${line}" >> "${OP}/cmds"
 	done
 
+	# Current Cmd build complete, remove flag to allow other processes to proceed (if any)
 	rm ${OP}/flag
 
 	running=0
 
 	if [ ! -z ${OP}/cmds ]; then
 		count=0
+		terminate=0
 
-		while read cmd; do
-			# Check for filled slots
+		DebugMsg "Beginning command execution"
+
+		while [ ${terminate} -lt 1 ]; do
+			# Check for filled slots, if filled, wait for *any* background job to complete before starting a new thread
 			[ ${running} -ge ${SLOTS} ] && wait -n && running=$(( ${running} - 1 ))
 
 			# Check for concurrent operations and wait if needed
-			[ -e ${OP}/flag ] && inotifywait -q -q -e delete_self ${OP}/flag
-			touch ${OP}/flag
+			WaitFor "${OP}/flag"
 
+			cmd=$(head "${OP}/cmds")
+
+			# If cmd is empty, terminate task, queue emptied
+			if [ "${cmd}" = "" ]; then
+				terminate=1
+				continue
+			fi
+
+			# Create Tmp file name
+			tmp="${OP}/tmp.${RANDOM}"
+
+			# Essentially, remove top cmd, save the rest to tmp file, remove cmds file, replace with tmp file, minus the top line
+			tail -n +2 "${OP}/cmds" > "${TMP}"
+			rm "${OP}/cmds"
+			mv "${TMP}" "${OP}/cmds"
+
+			# We have a new thread running, increment the running thread count (used to see if slots are filled)
 			running=$(( ${running} + 1 ))
-			echo "${running}" > ${OP}/running
+			echo "${running}" > "${RUNNING}"
 
+			# Increment total number of threads executed thus far
 			count=$(( ${count} + 1 ))
-			echo "${count}" > ${OP}/count
+			echo "${count}" > "${COUNT}"
 
 			# Execute command
-			echo "Cmd : ${cmd} - $(date)" > ${prefix}.stdout
-			${cmd} > ${prefix}.stdout.${count} 2> ${prefix}.stderr.${count} &
+			DebugMsg "Launching ${cmd}..."
+
+			echo "Cmd : ${cmd} - $(date)" > ${PREFIX}.${HOSTNAME}.stdout
+			${cmd} > ${PREFIX}.${HOSTNAME}.stdout.${count} 2> ${PREFIX}.${HOSTNAME}.stderr.${count} &
 
 			rm ${OP}/flag
-		done < ${OP}/cmds
+		done
 
-		cat ${OP}/${prefix}.stdout.* >> ${prefix}.stdout
-		cat ${OP}/${prefix}.stderr.* >> ${prefix}.stderr
+		date > ${FINISHED}
+
+		# TODO : Review if we want the stderr/stdout in the user's current folder... is this what I intended or an oversight???
+		cat ${OP}/${PREFIX}.${HOSTNAME}.stdout.* >> ${PREFIX}.${HOSTNAME}.stdout 2> /dev/null
+		cat ${OP}/${PREFIX}.${HOSTNAME}.stderr.* >> ${PREFIX}.${HOSTNAME}.stderr 2> /dev/null
+
+		rm ${OP}/${PREFIX}.${HOSTNAME}/stdout.* > /dev/null
+		rm ${OP}/${PREFIX}.${HOSTNAME}/stderr.* > /dev/null
+	else
+		[ -f ${OP}/cmds ] && rm ${OP}/cmds
 	fi
 }
 
 # Check for Queue Folder
 function CheckQueueFolder()
 {
+	DebugMsg "Checking for ${QUEUEFOLDER}"
+
 	# If paraqueue folder does not exist, create with default queue
-	[ ! -d "${QUEUEFOLDER}" ] && echo "Making Queue Management Folder" && mkdir -p "${QUEUEFOLDER}/default"
+	[ ! -d "${QUEUEFOLDER}" ] && echo "Making Queue Management Folder" && mkdir -p "${QUEUEFOLDER}/default" && DebugMsg "${QUEUEFOLDER} created..."
 }
 
 # Check Supplied Option for "-"
 function OptCheck()
 {
+	DebugMsg "OptCheck Called"
+
 	if [[ ${1} =~ ^- ]]; then
 		return 0
 	fi
@@ -265,12 +379,17 @@ function OptCheck()
 # Main Loop
 #
 
+DebugMsg "Executions started"
+
 CheckQueueFolder
 GetSlots
 
-while getopts "hs:l:toqrcx:f" opt; do
+DebugMsg "Processing cmd line args..."
+
+while getopts "hds:l:toqrcx:vf" opt; do
 	case "${opt}" in
 	"h")	Usage; exit 0 ;;
+	"d")	DEBUGMODE=1 ;;
 	"s")	SLOTS=${OPTARG} ;;
 	"l")	OPQUEUE="${OPTARG}";
 		MkQueue ;;
@@ -281,27 +400,40 @@ while getopts "hs:l:toqrcx:f" opt; do
 			OPTIND=$(( ${OPTIND} + 1 ))
 		fi
 
-		CheckStatus
+		CheckStatus; exit;
 		;;
-	"o")	ShowOutput ;;
-	"q")	ListQueues ;;
+	"o")	ShowOutput; exit ;;
+	"q")	ListQueues; exit ;;
 	"r")	OPQUEUE="${OPTARG}";
-		RemoveQueue ;;
+		RemoveQueue; exit ;;
 	"c")	if OptCheck "${argv[${OPTIND}]}"; then
 			OPQUEUE="default"
 		else
 			OPQUEUE="${argv[${OPTIND}]}"
 			OPTIND=$(( ${OPTIND} + 1 ))
 		fi
-		CleanQueue ;;
+		CleanQueue; exit ;;
 	"x")	OPQUEUE="${OPTARG}";
-		ForceRemove ;;
+		ForceRemove; exit ;;
 	"f")	if OptCheck "${argv[${OPTIND}]}"; then
 			OPQUEUE="default"
 		else
 			OPQUEUE="${argv[${OPTIND}]}"
 			OPTIND=$(( ${OPTIND} + 1 ))
 		fi
-		ForceClean ;;
+		ForceClean; exit ;;
+	"v")	VERBOSE=1 ;;
 	esac
 done
+
+DebugMsg "Cmdline args processed"
+
+shift $(( ${OPTIND} - 1 ))
+
+# TODO : How do we enter into a parallel execution from a different host with a existing queue???
+
+DebugMsg "Calling Execute"
+
+Execute ${*}
+
+DebugMsg "Call to execute completed"
