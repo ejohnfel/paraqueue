@@ -5,7 +5,7 @@
 #
 
 # Debug mode flag
-DEBUGMODE=1
+DEBUGMODE=0
 
 # Verbose Mode
 VERBOSE=0
@@ -22,6 +22,9 @@ PREFIX="output"
 # Flag semaphor file
 FLAG="busyflag"
 
+# Input File
+INPUT="/dev/stdin"
+
 #
 # Functions
 #
@@ -34,6 +37,7 @@ function Usage()
 	echo -e "Queue your scripts and execute them in parallel"
 	echo -e "=============="
 	echo -e "-s [slots]\tNumber of slots in queue"
+	echo -e "-n\t\tNew run, issues a force reset before executing"
 	echo -e "-l [label]\tCreate or set Label of queue for current operation"
 	echo -e "-t [label]\tStatus of default queue or labelled queue"
 	echo -e "-o [label]\tShow output of default queue or labelled queue"
@@ -50,6 +54,26 @@ function Usage()
 function DebugMsg()
 {
 	[ ${DEBUGMODE} -gt 0 ] && printf "$(date) : %s\n" "${*}"
+}
+
+# Show items in a column format
+function ShowItems()
+{
+	TTMP="/tmp/output.${RANDOM}"
+
+	echo "${1} :" > "${TTMP}"
+
+	while read line; do
+		bn=$(basename "${line}")
+		extension="${bn##*.}"
+
+		ol="Started on ${extension} : $(cat ${line})"
+		echo "${ol}" >> "${TTMP}"
+	done < $(ls -1 ${2}.*.*)
+
+	column "${TTMP}"
+
+	[ -e "${TTMP}" ] && rm "${TTMP}"
 }
 
 # Determine Slot Count Based on Prevailing resources
@@ -84,7 +108,29 @@ function MkQueue()
 function CheckStatus()
 {
 	DebugMsg "CheckStatus Called"
-	echo "Not yet implemented - ${OPQUEUE}"
+
+	OP="${QUEUEFOLDER}/${OPQUEUE}"
+
+	TTMP="/tmp/listing.${RANDOM}"
+
+	# Check Started Files
+
+	sc=$(ls -1 "${OP}"/started.* | wc -l)
+
+	if [ ${sc} -gt 0 ]; then
+		ShowItems "Start Time(s)" "${OP}/started"
+	else
+		echo -e "Running\t: Nothing running"
+	fi
+
+	# Check for Busy Semaphor
+	if [ -f "${OP}/${FLAG}" ]; then
+		echo -e "Busy\t: Semaphor present"
+	else
+		echo -e "Busy\t: No"
+	fi
+
+	[ -f ${TTMP} ] && rm "${TTMP}"
 }
 
 # Show Output of Queue
@@ -124,10 +170,10 @@ function CleanQueue()
 	OP="${QUEUEFOLDER}/${OPQUEUE}"
 
 	if [ -d "${OP}" ]; then
-		if [ ! -z ${OP}/cmds ]; then
+		if [ ! -s "${OP}/cmds" ]; then
 			DebugMsg "Cleaning ${OP}/${PREFIX}..."
 
-			rm ${OP}/${PREFIX}.*.* 2> /dev/null
+			rm ${OP}/${PREFIX}.* 2> /dev/null
 			rm ${OP}/started.* 2> /dev/null
 			rm ${OP}/finished.* 2> /dev/null
 			rm ${OP}/runtime.* 2> /dev/null
@@ -250,6 +296,7 @@ function WaitFor()
 }
 
 # Execute A Script with Completed command string
+# Parameters : [input file|/dev/stdin] [all other cmd line options]
 function Execute()
 {
 	# format all commands save in queue/cmds
@@ -258,7 +305,11 @@ function Execute()
 
 	DebugMsg "Execute Called with : ${*}"
 
-	OP=${QUEUEFOLDER}/${OPQUEUE}
+	# Extract input file name, shift it out of the parameter list
+	SRC="${1}"
+	shift 1
+
+	OP="${QUEUEFOLDER}/${OPQUEUE}"
 	STARTED="${OP}/started.${HOSTNAME}"
 	FINISHED="${OP}/finished.${HOSTNAME}"
 	RUNTIME="${OP}/runtime.${HOSTNAME}"
@@ -281,21 +332,21 @@ function Execute()
 	fi
 
 	# Look for, and set flags, to prevent multiple running instances fromn clobbering one another
-	WaitFor "${OP}/flag"
+	WaitFor "${OP}/${FLAG}"
 
 	# Fill in command file (if there is input)
 	DebugMsg "Reading in parameter lines, outputing to cmds file"
 
 	while read line; do
 		echo "${*} ${line}" >> "${OP}/cmds"
-	done
+	done < "${SRC}"
 
 	# Current Cmd build complete, remove flag to allow other processes to proceed (if any)
-	rm ${OP}/flag
+	[ -f "${OP}/${FLAG}" ] && rm "${OP}/${FLAG}"
 
 	running=0
 
-	if [ ! -z ${OP}/cmds ]; then
+	if [ ! -z "${OP}/cmds" ]; then
 		count=0
 		terminate=0
 
@@ -306,9 +357,9 @@ function Execute()
 			[ ${running} -ge ${SLOTS} ] && wait -n && running=$(( ${running} - 1 ))
 
 			# Check for concurrent operations and wait if needed
-			WaitFor "${OP}/flag"
+			WaitFor "${OP}/${FLAG}"
 
-			cmd=$(head "${OP}/cmds")
+			cmd=$(head -n 1 "${OP}/cmds")
 
 			# If cmd is empty, terminate task, queue emptied
 			if [ "${cmd}" = "" ]; then
@@ -317,12 +368,14 @@ function Execute()
 			fi
 
 			# Create Tmp file name
-			tmp="${OP}/tmp.${RANDOM}"
+			TMP="${OP}/tmp.${RANDOM}"
 
 			# Essentially, remove top cmd, save the rest to tmp file, remove cmds file, replace with tmp file, minus the top line
-			tail -n +2 "${OP}/cmds" > "${TMP}"
-			rm "${OP}/cmds"
-			mv "${TMP}" "${OP}/cmds"
+			if [ -f "${OP}/cmds" ]; then
+				tail -n +2 "${OP}/cmds" > "${TMP}"
+				rm "${OP}/cmds"
+				mv "${TMP}" "${OP}/cmds"
+			fi
 
 			# We have a new thread running, increment the running thread count (used to see if slots are filled)
 			running=$(( ${running} + 1 ))
@@ -335,22 +388,24 @@ function Execute()
 			# Execute command
 			DebugMsg "Launching ${cmd}..."
 
-			echo "Cmd : ${cmd} - $(date)" > ${PREFIX}.${HOSTNAME}.stdout
-			${cmd} > ${PREFIX}.${HOSTNAME}.stdout.${count} 2> ${PREFIX}.${HOSTNAME}.stderr.${count} &
+			echo "Cmd : ${cmd} - $(date)" > ${OP}/${PREFIX}.${HOSTNAME}.stdout
+			${cmd} > ${OP}/${PREFIX}.${HOSTNAME}.stdout.${count} 2> ${OP}/${PREFIX}.${HOSTNAME}.stderr.${count} &
 
-			rm ${OP}/flag
+			[ -f "${OP}/${FLAG}" ] && rm "${OP}/${FLAG}"
 		done
 
 		date > ${FINISHED}
 
 		# TODO : Review if we want the stderr/stdout in the user's current folder... is this what I intended or an oversight???
-		cat ${OP}/${PREFIX}.${HOSTNAME}.stdout.* >> ${PREFIX}.${HOSTNAME}.stdout 2> /dev/null
-		cat ${OP}/${PREFIX}.${HOSTNAME}.stderr.* >> ${PREFIX}.${HOSTNAME}.stderr 2> /dev/null
+		cat ${OP}/${PREFIX}.${HOSTNAME}.stdout.* >> ${OP}/${PREFIX}.${HOSTNAME}.stdout 2> /dev/null
+		cat ${OP}/${PREFIX}.${HOSTNAME}.stderr.* >> ${OP}/${PREFIX}.${HOSTNAME}.stderr 2> /dev/null
 
-		rm ${OP}/${PREFIX}.${HOSTNAME}/stdout.* > /dev/null
-		rm ${OP}/${PREFIX}.${HOSTNAME}/stderr.* > /dev/null
+		rm ${OP}/${PREFIX}.${HOSTNAME}.stdout.* > /dev/null
+		rm ${OP}/${PREFIX}.${HOSTNAME}.stderr.* > /dev/null
 	else
-		[ -f ${OP}/cmds ] && rm ${OP}/cmds
+		DebugMsg "cmds file was empty, is that right???"
+
+		[ -f "${OP}/cmds" ] && rm "${OP}/cmds"
 	fi
 }
 
@@ -386,42 +441,28 @@ GetSlots
 
 DebugMsg "Processing cmd line args..."
 
-while getopts "hds:l:toqrcx:vf" opt; do
+while getopts ":hni:ds:l:t:oqr:c:x:vf" opt; do
+	if [ "${opt}" = ":" ]; then
+		DebugMsg "Silent opt error : ${OPTARG}"
+		opt="${OPTARG}"
+		OPTARG="default"
+	fi
+
 	case "${opt}" in
 	"h")	Usage; exit 0 ;;
-	"d")	DEBUGMODE=1 ;;
+	"i")	INPUT="${OPTARG}" ;;
+	"d")	DEBUGMODE=1; DebugMsg "Entering debugmode" ;;
 	"s")	SLOTS=${OPTARG} ;;
-	"l")	OPQUEUE="${OPTARG}";
-		MkQueue ;;
-	"t")	if OptCheck "${argv[${OPTIND}]}"; then
-			OPQUEUE="default"
-		else
-			OPQUEUE="${argv[${OPTIND}]}"
-			OPTIND=$(( ${OPTIND} + 1 ))
-		fi
-
-		CheckStatus; exit;
-		;;
+	"l")	OPQUEUE="${OPTARG}"; MkQueue ;;
+	"t")	OPQUEUE="${OPTARG}"; CheckStatus; exit ;;
 	"o")	ShowOutput; exit ;;
 	"q")	ListQueues; exit ;;
 	"r")	OPQUEUE="${OPTARG}";
 		RemoveQueue; exit ;;
-	"c")	if OptCheck "${argv[${OPTIND}]}"; then
-			OPQUEUE="default"
-		else
-			OPQUEUE="${argv[${OPTIND}]}"
-			OPTIND=$(( ${OPTIND} + 1 ))
-		fi
-		CleanQueue; exit ;;
-	"x")	OPQUEUE="${OPTARG}";
-		ForceRemove; exit ;;
-	"f")	if OptCheck "${argv[${OPTIND}]}"; then
-			OPQUEUE="default"
-		else
-			OPQUEUE="${argv[${OPTIND}]}"
-			OPTIND=$(( ${OPTIND} + 1 ))
-		fi
-		ForceClean; exit ;;
+	"c")	OPQUEUE="${OPTARG}"; CleanQueue; exit ;;
+	"x")	OPQUEUE="${OPTARG}"; ForceRemove; exit ;;
+	"n")	CleanQueue ;;
+	"f")	ForceClean; exit ;;
 	"v")	VERBOSE=1 ;;
 	esac
 done
@@ -434,6 +475,6 @@ shift $(( ${OPTIND} - 1 ))
 
 DebugMsg "Calling Execute"
 
-Execute ${*}
+Execute "${INPUT}" ${*}
 
 DebugMsg "Call to execute completed"
