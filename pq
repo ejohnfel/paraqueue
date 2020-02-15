@@ -1,6 +1,14 @@
 #!/bin/bash
 
 #
+# Script to execute other scripts in parallel, based on how many available CPU cores there are.
+# The script will only run one queue when one or two CPU's are available, otherwise, n - 2
+# threads are executed. This is to leave enough CPU cores to do other things. You always
+# override this and declare how many "slots" are available. A CPU core is a "slot", but
+# you can execute as many slots as you like, but beware, performance will suffer.
+#
+
+#
 # Variables and Constants
 #
 
@@ -402,11 +410,10 @@ function Execute()
 
 		rm ${OP}/${PREFIX}.${HOSTNAME}.stdout.* > /dev/null
 		rm ${OP}/${PREFIX}.${HOSTNAME}.stderr.* > /dev/null
-	else
-		DebugMsg "cmds file was empty, is that right???"
-
-		[ -f "${OP}/cmds" ] && rm "${OP}/cmds"
 	fi
+
+	# Remove cmds file
+	[ -f "${OP}/cmds" ] && rm "${OP}/cmds"
 }
 
 # Check for Queue Folder
